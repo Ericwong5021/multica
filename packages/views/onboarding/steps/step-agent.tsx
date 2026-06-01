@@ -25,7 +25,7 @@ import { useT } from "../../i18n";
  * Step 4 — create the user's first agent.
  *
  * Picks a recommended template from the questionnaire answers
- * (`recommendTemplate()` maps role × use_case → one of 4 templates),
+ * (`recommendTemplate()` maps role × use_case → one of 5 templates),
  * attaches the template's default name + instructions, and ships a
  * ready-to-work agent on Create. Layout mirrors Questionnaire /
  * Workspace: a 2-column editorial shell with DragStrip + 3-region
@@ -57,6 +57,7 @@ const TEMPLATE_DEFAULTS: readonly Omit<AgentTemplate, "label" | "blurb" | "instr
   { id: "coding", defaultName: "Atlas", emoji: "⌘" },
   { id: "planning", defaultName: "Orion", emoji: "◐" },
   { id: "writing", defaultName: "Mira", emoji: "✎" },
+  { id: "prompt_engineer", defaultName: "Prompt Engineer", emoji: "⌁" },
   { id: "assistant", defaultName: "Vega", emoji: "✦" },
 ] as const;
 

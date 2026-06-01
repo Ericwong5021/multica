@@ -11,15 +11,38 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const consumeGovernanceApproval = `-- name: ConsumeGovernanceApproval :one
+const claimActiveGovernanceApproval = `-- name: ClaimActiveGovernanceApproval :one
 UPDATE governance_approval
 SET consumed_at = now()
-WHERE id = $1
+WHERE id = (
+    SELECT id FROM governance_approval
+    WHERE workspace_id = $1
+      AND action_id = $2
+      AND target_type = $3
+      AND target_id = $4
+      AND consumed_at IS NULL
+      AND (expires_at IS NULL OR expires_at > now())
+    ORDER BY created_at DESC
+    LIMIT 1
+    FOR UPDATE SKIP LOCKED
+)
 RETURNING id, workspace_id, action_id, target_type, target_id, issue_id, approval_source_type, approval_source_id, approved_by_type, approved_by_id, reason, expires_at, consumed_at, created_at
 `
 
-func (q *Queries) ConsumeGovernanceApproval(ctx context.Context, id pgtype.UUID) (GovernanceApproval, error) {
-	row := q.db.QueryRow(ctx, consumeGovernanceApproval, id)
+type ClaimActiveGovernanceApprovalParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ActionID    string      `json:"action_id"`
+	TargetType  string      `json:"target_type"`
+	TargetID    pgtype.UUID `json:"target_id"`
+}
+
+func (q *Queries) ClaimActiveGovernanceApproval(ctx context.Context, arg ClaimActiveGovernanceApprovalParams) (GovernanceApproval, error) {
+	row := q.db.QueryRow(ctx, claimActiveGovernanceApproval,
+		arg.WorkspaceID,
+		arg.ActionID,
+		arg.TargetType,
+		arg.TargetID,
+	)
 	var i GovernanceApproval
 	err := scanGovernanceApproval(row, &i)
 	return i, err

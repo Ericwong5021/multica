@@ -217,6 +217,51 @@ func TestRotateWebhookTokenConsumesApprovalAndWritesAudit(t *testing.T) {
 	assertGovernanceApprovalConsumed(t, approval.ID)
 }
 
+func TestGovernanceApprovalCannotAuthorizeTwoWebhookMutations(t *testing.T) {
+	agentID := createWebhookTestAgent(t, "governance one shot approval agent")
+	autopilotID := createWebhookTestAutopilot(t, agentID, "active", "run_only")
+	trigger := createWebhookTriggerViaHandler(t, autopilotID)
+	oldToken := *trigger.WebhookToken
+
+	approval := createGovernanceApprovalForTarget(t, "autopilot.webhook.rotate", "autopilot_trigger", trigger.ID)
+
+	req := newRequest(http.MethodPost, "/api/autopilots/"+autopilotID+"/triggers/"+trigger.ID+"/rotate-webhook-token", nil)
+	req = withURLParams(req, "id", autopilotID, "triggerId", trigger.ID)
+	w := httptest.NewRecorder()
+	testHandler.RotateAutopilotTriggerWebhookToken(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("first rotate with approval: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var rotated AutopilotTriggerResponse
+	if err := json.NewDecoder(w.Body).Decode(&rotated); err != nil {
+		t.Fatalf("decode rotated trigger: %v", err)
+	}
+	if rotated.WebhookToken == nil || *rotated.WebhookToken == oldToken {
+		t.Fatalf("first rotate did not change token: old=%q new=%v", oldToken, rotated.WebhookToken)
+	}
+
+	req = newRequest(http.MethodPost, "/api/autopilots/"+autopilotID+"/triggers/"+trigger.ID+"/rotate-webhook-token", nil)
+	req = withURLParams(req, "id", autopilotID, "triggerId", trigger.ID)
+	w = httptest.NewRecorder()
+	testHandler.RotateAutopilotTriggerWebhookToken(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("second rotate reused consumed approval: expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+
+	row, err := testHandler.Queries.GetAutopilotTrigger(req.Context(), parseUUID(trigger.ID))
+	if err != nil {
+		t.Fatalf("reload trigger: %v", err)
+	}
+	if row.WebhookToken.String != *rotated.WebhookToken {
+		t.Fatalf("denied second rotate changed token: previous=%q new=%q", *rotated.WebhookToken, row.WebhookToken.String)
+	}
+	assertGovernanceApprovalConsumed(t, approval.ID)
+	audit := findGovernanceAuditForApproval(t, approval.ID, "autopilot.webhook.rotate")
+	if audit.TargetID != trigger.ID {
+		t.Fatalf("unexpected audit after one-shot approval: %+v", audit)
+	}
+}
+
 func TestSetSigningSecretRequiresGovernanceApproval(t *testing.T) {
 	agentID := createWebhookTestAgent(t, "governance secret denied agent")
 	autopilotID := createWebhookTestAutopilot(t, agentID, "active", "run_only")

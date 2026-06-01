@@ -269,8 +269,22 @@ func (h *Handler) recordGovernanceAuditWithQueries(w http.ResponseWriter, r *htt
 		writeError(w, http.StatusInternalServerError, "failed to encode governance audit")
 		return false
 	}
-	approval, err := q.ConsumeGovernanceApproval(r.Context(), ctx.Approval.ID)
+	approval, err := q.ClaimActiveGovernanceApproval(r.Context(), db.ClaimActiveGovernanceApprovalParams{
+		WorkspaceID: workspaceID,
+		ActionID:    ctx.Action.ID,
+		TargetType:  targetType,
+		TargetID:    targetID,
+	})
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeJSON(w, http.StatusForbidden, map[string]any{
+				"error":             "governance action denied",
+				"action_id":         ctx.Action.ID,
+				"reason":            "approval is missing, expired, or already consumed",
+				"requires_approval": ctx.Decision.RequiresApproval,
+			})
+			return false
+		}
 		writeError(w, http.StatusInternalServerError, "failed to consume governance approval")
 		return false
 	}

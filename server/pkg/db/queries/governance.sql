@@ -20,10 +20,21 @@ WHERE workspace_id = $1
 ORDER BY created_at DESC
 LIMIT 1;
 
--- name: ConsumeGovernanceApproval :one
+-- name: ClaimActiveGovernanceApproval :one
 UPDATE governance_approval
 SET consumed_at = now()
-WHERE id = $1
+WHERE id = (
+    SELECT id FROM governance_approval
+    WHERE workspace_id = $1
+      AND action_id = $2
+      AND target_type = $3
+      AND target_id = $4
+      AND consumed_at IS NULL
+      AND (expires_at IS NULL OR expires_at > now())
+    ORDER BY created_at DESC
+    LIMIT 1
+    FOR UPDATE SKIP LOCKED
+)
 RETURNING *;
 
 -- name: ListGovernanceApprovals :many

@@ -530,6 +530,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// Squad leader evaluation (writes to activity_log)
 			r.Post("/api/issues/{id}/squad-evaluated", h.RecordSquadLeaderEvaluation)
 
+			// Governance policy matrix: read-only role/action strategies and
+			// current-caller decisions so automation can avoid trial-and-error.
+			r.Get("/api/governance/policy", h.GetGovernancePolicy)
+
 			// Autopilots
 			r.Route("/api/autopilots", func(r chi.Router) {
 				r.Get("/", h.ListAutopilots)

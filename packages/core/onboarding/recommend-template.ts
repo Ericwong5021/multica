@@ -1,11 +1,16 @@
 import type { QuestionnaireAnswers, Role, UseCase } from "./types";
 
 /**
- * Identifier for the four legacy onboarding agent templates. Keep in
+ * Identifier for the five onboarding agent templates. Keep in
  * sync with the template registry inside StepAgent in
  * `packages/views/onboarding/steps/step-agent.tsx`.
  */
-export type AgentTemplateId = "coding" | "planning" | "writing" | "assistant";
+export type AgentTemplateId =
+  | "coding"
+  | "planning"
+  | "writing"
+  | "assistant"
+  | "prompt_engineer";
 
 /**
  * Pick a recommended agent template based on the questionnaire
@@ -37,11 +42,12 @@ export function recommendTemplate(
 
   switch (role) {
     case "engineer":
-      if (useCases.includes("manage_team") || useCases.includes("plan_research"))
-        return "planning";
+      if (hasPromptEngineeringSignal(useCases)) return "prompt_engineer";
+      if (useCases.includes("plan_research")) return "planning";
       if (useCases.includes("write_publish")) return "writing";
       return "coding";
     case "product":
+      if (hasPromptEngineeringSignal(useCases)) return "prompt_engineer";
       if (useCases.includes("ship_code")) return "coding";
       return "planning";
     case "designer":
@@ -49,13 +55,17 @@ export function recommendTemplate(
     case "writer":
       return "writing";
     case "marketing":
+      if (hasPromptEngineeringSignal(useCases)) return "prompt_engineer";
       if (useCases.includes("write_publish") || useCases.includes("plan_research"))
         return "writing";
       return "planning";
     case "research":
+      if (useCases.includes("evaluate")) return "prompt_engineer";
       return "planning";
     case "founder":
     case "ops":
+      if (hasPromptEngineeringSignal(useCases)) return "prompt_engineer";
+      return "assistant";
     case "student":
     case "other":
       return "assistant";
@@ -63,9 +73,17 @@ export function recommendTemplate(
 }
 
 function fallbackFromUseCase(useCases: readonly UseCase[]): AgentTemplateId {
+  if (hasPromptEngineeringSignal(useCases)) return "prompt_engineer";
   if (useCases.includes("ship_code")) return "coding";
   if (useCases.includes("write_publish")) return "writing";
-  if (useCases.includes("manage_team") || useCases.includes("plan_research"))
-    return "planning";
+  if (useCases.includes("plan_research")) return "planning";
   return "assistant";
+}
+
+function hasPromptEngineeringSignal(useCases: readonly UseCase[]): boolean {
+  return (
+    useCases.includes("manage_team") ||
+    useCases.includes("automate_ops") ||
+    useCases.includes("evaluate")
+  );
 }

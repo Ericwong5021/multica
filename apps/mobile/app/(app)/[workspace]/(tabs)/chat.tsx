@@ -76,6 +76,7 @@ import { ChatTitleButton } from "@/components/chat/chat-title-button";
 import { ChatSessionActions } from "@/components/chat/chat-session-actions";
 import { ChatMessageList } from "@/components/chat/chat-message-list";
 import { ChatComposer } from "@/components/chat/chat-composer";
+import { VoiceCallPanel } from "@/components/chat/voice-call-panel";
 import { AgentPickerSheet } from "@/components/chat/agent-picker-sheet";
 import { NoAgentBanner } from "@/components/chat/no-agent-banner";
 import { OfflineBanner } from "@/components/chat/offline-banner";
@@ -90,6 +91,7 @@ export default function ChatTab() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [agentPickerOpen, setAgentPickerOpen] = useState(false);
+  const [voiceCallOpen, setVoiceCallOpen] = useState(false);
 
   // Bridge to the chat-sessions formSheet route. Mirror local
   // activeSessionId into the store so the picker can render the current
@@ -317,6 +319,7 @@ export default function ChatTab() {
 
   // ── Header / sheet actions ─────────────────────────────────────────────
   const handleNewChat = useCallback(() => {
+    setVoiceCallOpen(false);
     if (availableAgents.length > 1) {
       setAgentPickerOpen(true);
       return;
@@ -326,6 +329,7 @@ export default function ChatTab() {
   }, [availableAgents.length]);
 
   const handlePickAgent = useCallback((agent: Agent) => {
+    setVoiceCallOpen(false);
     setSelectedAgentId(agent.id);
     setActiveSessionId(null);
   }, []);
@@ -334,6 +338,7 @@ export default function ChatTab() {
   // when they delete the active one in the sheet).
   useEffect(() => {
     if (!selectRequest) return;
+    setVoiceCallOpen(false);
     setSelectedAgentId(null);
     setActiveSessionId(selectRequest.id);
     consumeSelect();
@@ -351,6 +356,7 @@ export default function ChatTab() {
           style: "destructive",
           onPress: () => {
             const id = activeSession.id;
+            setVoiceCallOpen(false);
             setActiveSessionId(null);
             deleteSession.mutate(id);
           },
@@ -414,12 +420,24 @@ export default function ChatTab() {
           agentName={currentAgent?.name}
           availability={presenceAvailability}
         />
+        {voiceCallOpen && currentAgent ? (
+          <VoiceCallPanel
+            agent={currentAgent}
+            pendingTask={pendingTask}
+            disabled={disabled}
+            disabledReason={disabledReason}
+            ensureSession={ensureSession}
+            onSend={handleSend}
+            onStop={handleStop}
+            onClose={() => setVoiceCallOpen(false)}
+          />
+        ) : null}
         <ChatComposer
           value={draft}
           onChangeText={(next) => setDraft(draftKey, next)}
           onSend={handleSend}
           onStop={handleStop}
-          latestAssistantMessage={latestAssistantMessage}
+          onVoiceCall={() => setVoiceCallOpen(true)}
           sending={sending}
           disabled={disabled}
           disabledReason={disabledReason}

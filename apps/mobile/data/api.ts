@@ -1269,7 +1269,7 @@ class ApiClient {
    */
   async uploadFile(
     asset: FileAsset,
-    opts?: { issueId?: string; commentId?: string },
+    opts?: { issueId?: string; commentId?: string; chatSessionId?: string },
   ): Promise<Attachment> {
     const rid = createRequestId();
     const start = Date.now();
@@ -1295,6 +1295,9 @@ class ApiClient {
     );
     if (opts?.issueId) formData.append("issue_id", opts.issueId);
     if (opts?.commentId) formData.append("comment_id", opts.commentId);
+    if (opts?.chatSessionId) {
+      formData.append("chat_session_id", opts.chatSessionId);
+    }
 
     console.log(`[api] → POST ${path}`, { rid, filename: asset.name });
 

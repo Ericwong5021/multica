@@ -86,9 +86,9 @@ interface Props {
   mentionPickerPath: Href;
 
   /** Attachment upload context — forwarded to `api.uploadFile`. Comment
-   *  passes `issueId`; chat omits both (uploads are session-scoped via
-   *  the message id assigned by the server post-send). */
-  uploadContext?: { issueId?: string; commentId?: string };
+   *  passes `issueId`; chat may pass `chatSessionId` so attachments can
+   *  be back-filled to the message id assigned by the server post-send. */
+  uploadContext?: { issueId?: string; commentId?: string; chatSessionId?: string };
 
   placeholder?: string;
   pillLabel?: string;
@@ -115,6 +115,9 @@ interface Props {
    *  this to show a Stop affordance while the agent is running. */
   isSending?: boolean;
   renderStop?: () => ReactNode;
+  /** Optional leading action next to the collapsed pill. Chat uses this
+   *  for voice-call entry without expanding the text composer. */
+  renderLeadingAction?: () => ReactNode;
 
   /** Hard-disable. Used when chat has no usable agent. The pill shows
    *  `disabledReason` instead of `pillLabel`, and the pill is
@@ -168,6 +171,7 @@ export function MessageComposer({
   expandTrigger,
   isSending = false,
   renderStop,
+  renderLeadingAction,
   disabled = false,
   disabledReason,
   manageKeyboard = true,
@@ -454,23 +458,26 @@ export function MessageComposer({
       className="border-t border-border bg-background px-3 pt-2"
       style={{ paddingBottom: (manageKeyboard ? insets.bottom : 0) + 8 }}
     >
-      <Pressable
-        onPress={expand}
-        disabled={disabled}
-        accessibilityRole="button"
-        accessibilityLabel={pillLabel}
-        accessibilityState={{ disabled }}
-        className="flex-row items-center gap-2 h-11 px-4 rounded-full bg-secondary active:opacity-80"
-      >
-        <Ionicons
-          name={pillIcon}
-          size={18}
-          color={theme.mutedForeground}
-        />
-        <Text className="text-base text-muted-foreground">
-          {disabled && disabledReason ? disabledReason : pillLabel}
-        </Text>
-      </Pressable>
+      <View className="flex-row items-center gap-2">
+        {renderLeadingAction ? renderLeadingAction() : null}
+        <Pressable
+          onPress={expand}
+          disabled={disabled}
+          accessibilityRole="button"
+          accessibilityLabel={pillLabel}
+          accessibilityState={{ disabled }}
+          className="flex-1 flex-row items-center gap-2 h-11 px-4 rounded-full bg-secondary active:opacity-80"
+        >
+          <Ionicons
+            name={pillIcon}
+            size={18}
+            color={theme.mutedForeground}
+          />
+          <Text className="text-base text-muted-foreground" numberOfLines={1}>
+            {disabled && disabledReason ? disabledReason : pillLabel}
+          </Text>
+        </Pressable>
+      </View>
     </View>
   );
 

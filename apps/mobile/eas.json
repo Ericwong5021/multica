@@ -1,0 +1,31 @@
+{
+  "cli": {
+    "version": ">= 16.0.0",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "production": {
+      "channel": "production",
+      "distribution": "store",
+      "env": {
+        "APP_ENV": "production"
+      },
+      "android": {
+        "buildType": "app-bundle"
+      },
+      "ios": {
+        "simulator": false
+      }
+    }
+  },
+  "submit": {
+    "production": {
+      "android": {
+        "track": "internal"
+      },
+      "ios": {
+        "ascAppId": "0000000000"
+      }
+    }
+  }
+}

@@ -1,0 +1,96 @@
+name: Mobile Release
+
+on:
+  push:
+    tags:
+      - "mobile-v*.*.*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: EAS build and submit
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/mobile
+    env:
+      APP_ENV: production
+      ASC_APP_ID: ${{ secrets.ASC_APP_ID }}
+      EAS_PROJECT_ID: ${{ secrets.EAS_PROJECT_ID }}
+      EXPO_ANDROID_PACKAGE_PROD: ${{ vars.EXPO_ANDROID_PACKAGE_PROD }}
+      EXPO_BUNDLE_IDENTIFIER_PROD: ${{ vars.EXPO_BUNDLE_IDENTIFIER_PROD }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Validate mobile release secrets
+        shell: bash
+        run: |
+          missing=()
+          [[ -n "${{ secrets.EXPO_TOKEN }}" ]] || missing+=("EXPO_TOKEN")
+          [[ -n "$ASC_APP_ID" ]] || missing+=("ASC_APP_ID")
+          [[ -n "$EAS_PROJECT_ID" ]] || missing+=("EAS_PROJECT_ID")
+          if (( ${#missing[@]} > 0 )); then
+            printf 'Missing required secret(s): %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Setup EAS
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          packager: pnpm
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Install dependencies
+        working-directory: .
+        run: pnpm install
+
+      - name: Type check and lint
+        working-directory: .
+        run: pnpm exec turbo typecheck lint --filter=@multica/mobile
+
+      - name: Configure EAS submit profile
+        run: |
+          node -e '
+            const fs = require("fs");
+            const eas = JSON.parse(fs.readFileSync("eas.json", "utf8"));
+            eas.submit ??= {};
+            eas.submit.production ??= {};
+            eas.submit.production.ios ??= {};
+            eas.submit.production.ios.ascAppId = process.env.ASC_APP_ID;
+            fs.writeFileSync("eas.json", JSON.stringify(eas, null, 2) + "\n");
+          '
+
+      - name: Build Android and iOS with EAS
+        run: |
+          eas build \
+            --platform all \
+            --profile production \
+            --auto-submit-with-profile production \
+            --non-interactive \
+            --json \
+            > eas-builds.json
+
+      - name: Upload EAS build metadata
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-eas-builds-${{ github.ref_name }}
+          path: apps/mobile/eas-builds.json
+          if-no-files-found: ignore

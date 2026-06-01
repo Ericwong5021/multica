@@ -52,10 +52,13 @@ func TestGetGovernancePolicyReturnsDecisionMatrix(t *testing.T) {
 	}
 }
 
-func TestGetGovernancePolicyApprovedContextAllowsOwnerApprovalActions(t *testing.T) {
-	req := newRequest(http.MethodGet, "/api/governance/policy?approved=true", nil)
-	req.Header.Set("X-User-ID", testUserID)
-	req.Header.Set("X-Workspace-ID", testWorkspaceID)
+func TestGetGovernancePolicyIncludesPersistedApprovalSources(t *testing.T) {
+	agentID := createWebhookTestAgent(t, "governance policy approval agent")
+	autopilotID := createWebhookTestAutopilot(t, agentID, "active", "create_issue")
+
+	createGovernanceApprovalForTarget(t, "autopilot.delete", "autopilot", autopilotID)
+
+	req := newRequest(http.MethodGet, "/api/governance/policy", nil)
 
 	w := httptest.NewRecorder()
 	testHandler.GetGovernancePolicy(w, req)
@@ -67,12 +70,142 @@ func TestGetGovernancePolicyApprovedContextAllowsOwnerApprovalActions(t *testing
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if !resp.Approved {
-		t.Fatal("approved context should be true")
+	if len(resp.ApprovalSources) == 0 {
+		t.Fatal("expected persisted approval sources")
 	}
 	for _, decision := range resp.Decisions {
-		if decision.ActionID == "agent.create" && !decision.Allowed {
-			t.Fatalf("agent.create should be allowed with owner role and approval: %+v", decision)
+		if decision.ActionID == "autopilot.delete" && (!decision.RequiresApproval || decision.Allowed) {
+			t.Fatalf("policy matrix should still require target-specific execution approval: %+v", decision)
 		}
 	}
+}
+
+func TestDeleteAutopilotRequiresGovernanceApproval(t *testing.T) {
+	agentID := createWebhookTestAgent(t, "governance denied agent")
+	autopilotID := createWebhookTestAutopilot(t, agentID, "active", "create_issue")
+
+	req := newRequest(http.MethodDelete, "/api/autopilots/"+autopilotID, nil)
+	req = withURLParam(req, "id", autopilotID)
+	w := httptest.NewRecorder()
+	testHandler.DeleteAutopilot(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("DeleteAutopilot without approval: expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+
+	if _, err := testHandler.Queries.GetAutopilot(req.Context(), parseUUID(autopilotID)); err != nil {
+		t.Fatalf("autopilot should still exist after denied delete: %v", err)
+	}
+}
+
+func TestDeleteAutopilotConsumesApprovalAndWritesAudit(t *testing.T) {
+	agentID := createWebhookTestAgent(t, "governance approved agent")
+	autopilotID := createWebhookTestAutopilot(t, agentID, "active", "create_issue")
+
+	approval := createGovernanceApprovalForTarget(t, "autopilot.delete", "autopilot", autopilotID)
+
+	req := newRequest(http.MethodDelete, "/api/autopilots/"+autopilotID, nil)
+	req = withURLParam(req, "id", autopilotID)
+	w := httptest.NewRecorder()
+	testHandler.DeleteAutopilot(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("DeleteAutopilot with approval: expected 204, got %d: %s", w.Code, w.Body.String())
+	}
+
+	w = httptest.NewRecorder()
+	req = newRequest(http.MethodGet, "/api/governance/audits", nil)
+	testHandler.ListGovernanceAudits(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListGovernanceAudits: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var auditsResp struct {
+		Audits []GovernanceAuditResponse `json:"audits"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&auditsResp); err != nil {
+		t.Fatalf("decode audits: %v", err)
+	}
+	if len(auditsResp.Audits) == 0 {
+		t.Fatal("expected audit row")
+	}
+	found := false
+	for _, audit := range auditsResp.Audits {
+		if audit.ApprovalID != nil && *audit.ApprovalID == approval.ID && audit.ActionID == "autopilot.delete" {
+			found = true
+			if audit.ActorID != testUserID {
+				t.Fatalf("audit actor_id = %q, want %q", audit.ActorID, testUserID)
+			}
+			if audit.BeforeSummary["title"] == "" || audit.AfterSummary["deleted"] != true {
+				t.Fatalf("unexpected audit summaries: before=%v after=%v", audit.BeforeSummary, audit.AfterSummary)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("missing audit for approval %s: %+v", approval.ID, auditsResp.Audits)
+	}
+
+	w = httptest.NewRecorder()
+	req = newRequest(http.MethodGet, "/api/governance/approvals", nil)
+	testHandler.ListGovernanceApprovals(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListGovernanceApprovals: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var approvalsResp struct {
+		Approvals []GovernanceApprovalResponse `json:"approvals"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&approvalsResp); err != nil {
+		t.Fatalf("decode approvals: %v", err)
+	}
+	for _, item := range approvalsResp.Approvals {
+		if item.ID == approval.ID && item.ConsumedAt == nil {
+			t.Fatalf("approval %s should be consumed after approved delete", approval.ID)
+		}
+	}
+}
+
+func TestGovernanceDoesNotRegressIssueMetadataFlow(t *testing.T) {
+	issueID := createMetadataTestIssue(t, "Governance metadata regression")
+	w := httptest.NewRecorder()
+	req := newRequest("PUT", "/api/issues/"+issueID+"/metadata/pipeline_status", json.RawMessage(`{"value":"waiting_review"}`))
+	req = withURLParams(req, "id", issueID, "key", "pipeline_status")
+	testHandler.SetIssueMetadataKey(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("SetIssueMetadataKey: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	w = httptest.NewRecorder()
+	req = newRequest("GET", "/api/issues/"+issueID+"/metadata", nil)
+	req = withURLParam(req, "id", issueID)
+	testHandler.ListIssueMetadata(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListIssueMetadata: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Metadata map[string]any `json:"metadata"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode metadata: %v", err)
+	}
+	if resp.Metadata["pipeline_status"] != "waiting_review" {
+		t.Fatalf("metadata pipeline_status = %v", resp.Metadata["pipeline_status"])
+	}
+}
+
+func createGovernanceApprovalForTarget(t *testing.T, actionID, targetType, targetID string) GovernanceApprovalResponse {
+	t.Helper()
+	w := httptest.NewRecorder()
+	req := newRequest(http.MethodPost, "/api/governance/approvals", map[string]any{
+		"action_id":            actionID,
+		"target_type":          targetType,
+		"target_id":            targetID,
+		"approval_source_type": "manual",
+		"reason":               "test approval",
+	})
+	testHandler.CreateGovernanceApproval(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateGovernanceApproval: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp GovernanceApprovalResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode approval: %v", err)
+	}
+	return resp
 }

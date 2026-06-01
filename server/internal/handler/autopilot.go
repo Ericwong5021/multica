@@ -615,10 +615,11 @@ func (h *Handler) DeleteAutopilot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := h.Queries.GetAutopilotInWorkspace(r.Context(), db.GetAutopilotInWorkspaceParams{
+	ap, err := h.Queries.GetAutopilotInWorkspace(r.Context(), db.GetAutopilotInWorkspaceParams{
 		ID:          idUUID,
 		WorkspaceID: wsUUID,
-	}); err != nil {
+	})
+	if err != nil {
 		writeError(w, http.StatusNotFound, "autopilot not found")
 		return
 	}
@@ -627,9 +628,37 @@ func (h *Handler) DeleteAutopilot(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	userUUID := parseUUID(userID)
 
-	if err := h.Queries.DeleteAutopilot(r.Context(), idUUID); err != nil {
+	govCtx, ok := h.requireGovernanceApproval(w, r, wsUUID, "autopilot.delete", "autopilot", idUUID)
+	if !ok {
+		return
+	}
+
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to start transaction")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	qtx := h.Queries.WithTx(tx)
+
+	if err := qtx.DeleteAutopilot(r.Context(), idUUID); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete autopilot")
+		return
+	}
+	if !h.recordGovernanceAuditWithQueries(w, r, qtx, wsUUID, govCtx, "autopilot", idUUID, "member", userUUID,
+		map[string]any{
+			"id":     uuidToString(ap.ID),
+			"title":  ap.Title,
+			"status": ap.Status,
+		},
+		map[string]any{"deleted": true},
+	) {
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to commit governance delete")
 		return
 	}
 
@@ -1059,9 +1088,38 @@ func (h *Handler) DeleteAutopilotTrigger(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
+	userUUID := parseUUID(userID)
 
-	if err := h.Queries.DeleteAutopilotTrigger(r.Context(), triggerUUID); err != nil {
+	govCtx, ok := h.requireGovernanceApproval(w, r, wsUUID, "autopilot.delete", "autopilot_trigger", triggerUUID)
+	if !ok {
+		return
+	}
+
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to start transaction")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	qtx := h.Queries.WithTx(tx)
+
+	if err := qtx.DeleteAutopilotTrigger(r.Context(), triggerUUID); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete trigger")
+		return
+	}
+	if !h.recordGovernanceAuditWithQueries(w, r, qtx, wsUUID, govCtx, "autopilot_trigger", triggerUUID, "member", userUUID,
+		map[string]any{
+			"id":           uuidToString(trigger.ID),
+			"autopilot_id": uuidToString(trigger.AutopilotID),
+			"kind":         trigger.Kind,
+			"enabled":      trigger.Enabled,
+		},
+		map[string]any{"deleted": true},
+	) {
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to commit governance delete")
 		return
 	}
 

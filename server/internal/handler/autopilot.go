@@ -1158,32 +1158,73 @@ func (h *Handler) RotateAutopilotTriggerWebhookToken(w http.ResponseWriter, r *h
 		return
 	}
 
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	userUUID := parseUUID(userID)
+	govCtx, ok := h.requireGovernanceApproval(w, r, ap.WorkspaceID, "autopilot.webhook.rotate", "autopilot_trigger", triggerUUID)
+	if !ok {
+		return
+	}
+
 	var rotated db.AutopilotTrigger
+	rotatedOK := false
 	for attempt := 0; attempt < 3; attempt++ {
 		token, terr := generateWebhookToken()
 		if terr != nil {
 			writeError(w, http.StatusInternalServerError, "failed to generate webhook token")
 			return
 		}
-		rotated, err = h.Queries.RotateAutopilotTriggerWebhookToken(r.Context(), db.RotateAutopilotTriggerWebhookTokenParams{
+
+		tx, txErr := h.TxStarter.Begin(r.Context())
+		if txErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to start transaction")
+			return
+		}
+		qtx := h.Queries.WithTx(tx)
+
+		rotated, err = qtx.RotateAutopilotTriggerWebhookToken(r.Context(), db.RotateAutopilotTriggerWebhookTokenParams{
 			ID:           triggerUUID,
 			WebhookToken: pgtype.Text{String: token, Valid: true},
 		})
-		if err == nil {
-			break
+		if err != nil {
+			_ = tx.Rollback(r.Context())
+			if !isUniqueViolation(err) {
+				writeError(w, http.StatusInternalServerError, "failed to rotate webhook token")
+				return
+			}
+			continue
 		}
-		if !isUniqueViolation(err) {
-			writeError(w, http.StatusInternalServerError, "failed to rotate webhook token")
+		if !h.recordGovernanceAuditWithQueries(w, r, qtx, ap.WorkspaceID, govCtx, "autopilot_trigger", triggerUUID, "member", userUUID,
+			map[string]any{
+				"id":                uuidToString(prev.ID),
+				"autopilot_id":      uuidToString(prev.AutopilotID),
+				"kind":              prev.Kind,
+				"has_webhook_token": prev.WebhookToken.Valid && prev.WebhookToken.String != "",
+			},
+			map[string]any{
+				"rotated":           true,
+				"has_webhook_token": rotated.WebhookToken.Valid && rotated.WebhookToken.String != "",
+			},
+		) {
+			_ = tx.Rollback(r.Context())
 			return
 		}
+		if err := tx.Commit(r.Context()); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to commit governance webhook rotation")
+			return
+		}
+		err = nil
+		rotatedOK = true
+		break
 	}
-	if err != nil {
+	if !rotatedOK {
 		writeError(w, http.StatusInternalServerError, "failed to rotate webhook token")
 		return
 	}
 
 	resp := h.triggerToResponse(rotated)
-	userID, _ := requireUserID(w, r)
 	h.publish(protocol.EventAutopilotUpdated, workspaceID, "member", userID, map[string]any{
 		"autopilot_id": uuidToString(ap.ID),
 		"trigger":      resp,
@@ -1237,18 +1278,52 @@ func (h *Handler) SetAutopilotTriggerSigningSecret(w http.ResponseWriter, r *htt
 		return
 	}
 
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	userUUID := parseUUID(userID)
+	govCtx, ok := h.requireGovernanceApproval(w, r, ap.WorkspaceID, "autopilot.webhook.rotate", "autopilot_trigger", triggerUUID)
+	if !ok {
+		return
+	}
+
 	param := db.SetAutopilotTriggerSigningSecretParams{ID: triggerUUID}
 	if secret != "" {
 		param.SigningSecret = pgtype.Text{String: secret, Valid: true}
 	}
-	updated, err := h.Queries.SetAutopilotTriggerSigningSecret(r.Context(), param)
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to start transaction")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	qtx := h.Queries.WithTx(tx)
+
+	updated, err := qtx.SetAutopilotTriggerSigningSecret(r.Context(), param)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update signing secret")
 		return
 	}
+	if !h.recordGovernanceAuditWithQueries(w, r, qtx, ap.WorkspaceID, govCtx, "autopilot_trigger", triggerUUID, "member", userUUID,
+		map[string]any{
+			"id":                 uuidToString(prev.ID),
+			"autopilot_id":       uuidToString(prev.AutopilotID),
+			"kind":               prev.Kind,
+			"has_signing_secret": prev.SigningSecret.Valid && prev.SigningSecret.String != "",
+		},
+		map[string]any{
+			"has_signing_secret": updated.SigningSecret.Valid && updated.SigningSecret.String != "",
+		},
+	) {
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to commit governance signing secret update")
+		return
+	}
 
 	resp := h.triggerToResponse(updated)
-	userID, _ := requireUserID(w, r)
 	// Publish the trigger update so the UI can refresh the has_signing_secret
 	// badge in real time. The event payload only carries the response shape,
 	// which excludes the secret.

@@ -1094,7 +1094,7 @@ class ApiClient {
     );
 
     console.log(`[api] → POST ${path}`, { rid, filename: asset.name });
-    const res = await fetch(`${API_URL}${path}`, {
+    const res = await fetch(`${getEffectiveApiUrl()}${path}`, {
       method: "POST",
       headers,
       body: formData,

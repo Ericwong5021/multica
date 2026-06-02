@@ -153,6 +153,12 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		CloudRuntimeFleetTimeout: envDuration("MULTICA_CLOUD_FLEET_TIMEOUT", 35*time.Second),
 		AttachmentDownloadMode:   os.Getenv("ATTACHMENT_DOWNLOAD_MODE"),
 		AttachmentDownloadURLTTL: envDuration("ATTACHMENT_DOWNLOAD_URL_TTL", 30*time.Minute),
+		Speech: handler.SpeechConfig{
+			TranscribeURL: strings.TrimSpace(os.Getenv("MULTICA_SPEECH_TRANSCRIBE_URL")),
+			SynthesizeURL: strings.TrimSpace(os.Getenv("MULTICA_SPEECH_SYNTHESIZE_URL")),
+			APIKey:        strings.TrimSpace(os.Getenv("MULTICA_SPEECH_API_KEY")),
+			Mock:          os.Getenv("MULTICA_SPEECH_MOCK") == "true",
+		},
 	}
 	h := handler.New(queries, pool, hub, bus, emailSvc, store, cfSigner, analyticsClient, signupConfig, daemonHub)
 	h.Metrics = opts.BusinessMetrics
@@ -947,6 +953,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				})
 			})
 			r.Get("/api/chat/pending-tasks", h.ListPendingChatTasks)
+
+			r.Route("/api/speech", func(r chi.Router) {
+				r.Post("/transcribe", h.TranscribeSpeech)
+				r.Post("/synthesize", h.SynthesizeSpeech)
+			})
 
 			// Inbox
 			r.Route("/api/inbox", func(r chi.Router) {

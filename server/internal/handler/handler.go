@@ -84,6 +84,15 @@ type Config struct {
 	CloudRuntimeFleetTimeout time.Duration
 	AttachmentDownloadMode   string
 	AttachmentDownloadURLTTL time.Duration
+	Speech                   SpeechConfig
+}
+
+type SpeechConfig struct {
+	TranscribeURL string
+	SynthesizeURL string
+	APIKey        string
+	Mock          bool
+	HTTPClient    *http.Client
 }
 
 type cloudRuntimeProxy interface {
@@ -122,6 +131,7 @@ type Handler struct {
 	WebhookRateLimiter   WebhookRateLimiter
 	WebhookIPRateLimiter WebhookRateLimiter
 	CloudRuntime         cloudRuntimeProxy
+	Speech               SpeechProxy
 	// Lark integration. All three are nil when the Lark master key
 	// (MULTICA_LARK_SECRET_KEY) is unset; the corresponding HTTP
 	// handlers return 503 in that case so a misconfigured self-host
@@ -210,6 +220,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 			BaseURL: cfg.CloudRuntimeFleetURL,
 			Timeout: cfg.CloudRuntimeFleetTimeout,
 		}),
+		Speech: NewHTTPSpeechProxy(cfg.Speech),
 		cfg: cfg,
 	}
 }

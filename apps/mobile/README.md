@@ -110,3 +110,7 @@ Tap **Use default** on the login screen to clear the custom backend and return t
 For self-hosted Multica, start the backend first, confirm `http://<host>:8080/health` returns JSON, then configure the mobile app with `http://<host>:8080`. If the backend exposes `daemon_app_url` from `/api/config`, mobile web links use that runtime app URL; otherwise they fall back to the build-time `EXPO_PUBLIC_WEB_URL`.
 
 Changing `.env.*` still changes the default URL for a newly built bundle, but it is no longer required just to connect an installed app to a self-hosted backend.
+
+## Voice backend behavior
+
+The iOS client records short audio locally and sends it only to the Multica backend speech proxy. It does not receive ASR/TTS provider keys. If the backend has speech disabled or the provider is unavailable, speech calls return typed recoverable errors such as `provider_missing`, `rate_limited`, `quota_exceeded`, or `provider_timeout`; the app should let the user continue by typing the message.

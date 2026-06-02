@@ -142,6 +142,21 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 
 	cfSigner := auth.NewCloudFrontSignerFromEnv()
 
+	speechConfig := handler.SpeechConfig{
+		Mode:          strings.TrimSpace(os.Getenv("MULTICA_SPEECH_MODE")),
+		TranscribeURL: strings.TrimSpace(os.Getenv("MULTICA_SPEECH_TRANSCRIBE_URL")),
+		SynthesizeURL: strings.TrimSpace(os.Getenv("MULTICA_SPEECH_SYNTHESIZE_URL")),
+		APIKey:        strings.TrimSpace(os.Getenv("MULTICA_SPEECH_API_KEY")),
+		Mock:          os.Getenv("MULTICA_SPEECH_MOCK") == "true",
+		Timeout:       envDuration("MULTICA_SPEECH_TIMEOUT", 45*time.Second),
+		MaxAudioBytes: int64(envPositiveInt("MULTICA_SPEECH_MAX_AUDIO_BYTES", 10*1024*1024)),
+		MaxTextRunes:  envPositiveInt("MULTICA_SPEECH_MAX_TEXT_RUNES", 4000),
+		RateLimit: handler.WebhookRateLimit{
+			Limit:  envPositiveInt("MULTICA_SPEECH_RATE_LIMIT", 20),
+			Window: envDuration("MULTICA_SPEECH_RATE_WINDOW", time.Minute),
+		},
+	}
+
 	signupConfig := handler.Config{
 		AllowSignup:              os.Getenv("ALLOW_SIGNUP") != "false",
 		AllowedEmails:            splitAndTrim(os.Getenv("ALLOWED_EMAILS")),
@@ -153,12 +168,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		CloudRuntimeFleetTimeout: envDuration("MULTICA_CLOUD_FLEET_TIMEOUT", 35*time.Second),
 		AttachmentDownloadMode:   os.Getenv("ATTACHMENT_DOWNLOAD_MODE"),
 		AttachmentDownloadURLTTL: envDuration("ATTACHMENT_DOWNLOAD_URL_TTL", 30*time.Minute),
-		Speech: handler.SpeechConfig{
-			TranscribeURL: strings.TrimSpace(os.Getenv("MULTICA_SPEECH_TRANSCRIBE_URL")),
-			SynthesizeURL: strings.TrimSpace(os.Getenv("MULTICA_SPEECH_SYNTHESIZE_URL")),
-			APIKey:        strings.TrimSpace(os.Getenv("MULTICA_SPEECH_API_KEY")),
-			Mock:          os.Getenv("MULTICA_SPEECH_MOCK") == "true",
-		},
+		Speech:                   speechConfig,
 	}
 	h := handler.New(queries, pool, hub, bus, emailSvc, store, cfSigner, analyticsClient, signupConfig, daemonHub)
 	h.Metrics = opts.BusinessMetrics
@@ -183,6 +193,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		h.LivenessStore = handler.NewRedisLivenessStore(rdb)
 		h.WebhookRateLimiter = handler.NewRedisWebhookRateLimiter(rdb, handler.DefaultWebhookRateLimit())
 		h.WebhookIPRateLimiter = handler.NewRedisWebhookIPRateLimiter(rdb, handler.DefaultWebhookIPRateLimit())
+		h.SpeechRateLimiter = handler.NewRedisSpeechRateLimiter(rdb, handler.DefaultSpeechRateLimitForConfig(speechConfig))
 	}
 
 	// Lark integration. Only wired when MULTICA_LARK_SECRET_KEY is set:

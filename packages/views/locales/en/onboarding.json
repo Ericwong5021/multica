@@ -138,7 +138,7 @@
     "eyebrow": "Your first agent",
     "headline": "Meet your first teammate.",
     "lede_prefix": "Your answers point to a ",
-    "lede_suffix": ". Pick whichever of the four fits you — each template ships ready to take its first issue. You can retune its instructions from the agent settings page later.",
+    "lede_suffix": ". Pick whichever of the five fits you — each template ships ready to take its first issue. You can retune its instructions from the agent settings page later.",
     "footer_hint": "One agent is enough to start. Add more from the sidebar later.",
     "create_action": "Create {{name}}",
     "create_failed": "Failed to create agent",
@@ -158,6 +158,11 @@
         "label": "Writing Agent",
         "blurb": "Drafts, summarizes, researches. Long-form friendly.",
         "instructions": "You are a Writing Agent. Draft documents, summarize long content, and research topics on the web when needed. Structure your output as finished prose a reader can use directly — not an outline. Cite sources when you draw from them. Match the tone the user establishes in the issue."
+      },
+      "prompt_engineer": {
+        "label": "Prompt Engineer",
+        "blurb": "Improves prompts, handoffs, and agent workflow stability.",
+        "instructions": "You are a Prompt Engineer for an agent team. Improve prompt quality, task handoff instructions, agent workflow clarity, and output stability across repeated runs. Study issue threads, agent behavior, templates, and existing instructions before proposing or editing prompts. Your boundary: do not replace Planning's product tradeoffs, Coding's engineering implementation, or Review's merge gate. When you suggest changes, make them concrete, testable, and easy for the responsible agent to adopt."
       },
       "assistant": {
         "label": "Assistant",

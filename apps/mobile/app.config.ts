@@ -47,8 +47,22 @@ export default ({ config }: ConfigContext): ExpoConfig => {
           ? "ai.multica.mobile.staging"
           : (process.env.EXPO_BUNDLE_IDENTIFIER_DEV ?? "ai.multica.mobile.dev"),
     },
+    android: {
+      package: isProd
+        ? (process.env.EXPO_ANDROID_PACKAGE_PROD ?? "ai.multica.mobile")
+        : isStaging
+          ? "ai.multica.mobile.staging"
+          : (process.env.EXPO_ANDROID_PACKAGE_DEV ?? "ai.multica.mobile.dev"),
+    },
     plugins: [
       "expo-router",
+      [
+        "expo-audio",
+        {
+          microphonePermission:
+            "Allow Multica to record short voice messages for Agent chat transcription.",
+        },
+      ],
       "expo-secure-store",
       "@react-native-community/datetimepicker",
       "react-native-enriched-markdown",
@@ -74,6 +88,13 @@ export default ({ config }: ConfigContext): ExpoConfig => {
         },
       ],
     ],
-    extra: { APP_ENV: env },
+    extra: {
+      APP_ENV: env,
+      eas: process.env.EAS_PROJECT_ID
+        ? {
+            projectId: process.env.EAS_PROJECT_ID,
+          }
+        : undefined,
+    },
   };
 };

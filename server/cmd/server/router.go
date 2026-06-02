@@ -139,6 +139,12 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		TrustedProxies:           parseTrustedProxies(os.Getenv("MULTICA_TRUSTED_PROXIES")),
 		CloudRuntimeFleetURL:     cloudRuntimeFleetURLFromEnv(),
 		CloudRuntimeFleetTimeout: envDuration("MULTICA_CLOUD_FLEET_TIMEOUT", 35*time.Second),
+		Speech: handler.SpeechConfig{
+			TranscribeURL: strings.TrimSpace(os.Getenv("MULTICA_SPEECH_TRANSCRIBE_URL")),
+			SynthesizeURL: strings.TrimSpace(os.Getenv("MULTICA_SPEECH_SYNTHESIZE_URL")),
+			APIKey:        strings.TrimSpace(os.Getenv("MULTICA_SPEECH_API_KEY")),
+			Mock:          os.Getenv("MULTICA_SPEECH_MOCK") == "true",
+		},
 	}
 	h := handler.New(queries, pool, hub, bus, emailSvc, store, cfSigner, analyticsClient, signupConfig, daemonHub)
 	if opts.DaemonWakeup != nil {
@@ -530,6 +536,15 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// Squad leader evaluation (writes to activity_log)
 			r.Post("/api/issues/{id}/squad-evaluated", h.RecordSquadLeaderEvaluation)
 
+			// Governance policy, approvals, and audit trail for high-risk
+			// workspace/project automation actions.
+			r.Route("/api/governance", func(r chi.Router) {
+				r.Get("/policy", h.GetGovernancePolicy)
+				r.Get("/approvals", h.ListGovernanceApprovals)
+				r.Post("/approvals", h.CreateGovernanceApproval)
+				r.Get("/audits", h.ListGovernanceAudits)
+			})
+
 			// Autopilots
 			r.Route("/api/autopilots", func(r chi.Router) {
 				r.Get("/", h.ListAutopilots)
@@ -711,6 +726,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				})
 			})
 			r.Get("/api/chat/pending-tasks", h.ListPendingChatTasks)
+
+			r.Route("/api/speech", func(r chi.Router) {
+				r.Post("/transcribe", h.TranscribeSpeech)
+				r.Post("/synthesize", h.SynthesizeSpeech)
+			})
 
 			// Inbox
 			r.Route("/api/inbox", func(r chi.Router) {

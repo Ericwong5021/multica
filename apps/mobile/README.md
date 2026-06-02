@@ -103,6 +103,38 @@ Edit `EXPO_PUBLIC_API_URL` in `.env.staging`, `.env.production`, or `.env.develo
 
 For local backend testing, use your Mac's LAN IP (`ipconfig getifaddr en0`), not `localhost`.
 
+## Crash reporting
+
+Crash reporting uses `@sentry/react-native` and is opt-in per environment.
+Local development stays quiet unless you explicitly enable it:
+
+```bash
+EXPO_PUBLIC_SENTRY_ENABLED=true
+EXPO_PUBLIC_SENTRY_DSN=https://public-key@o000000.ingest.sentry.io/0000000
+```
+
+Use a staging DSN for TestFlight/device validation and a production DSN only
+for production builds. `APP_ENV` is sent as the Sentry environment, and the
+app records release/version, platform, redacted route, and a hashed workspace
+slug. Do not include issue/comment text, attachment contents, audio, or
+transcripts in manual crash contexts.
+
+Source maps and native debug symbols are uploaded during EAS/native builds
+when these build-time variables are present:
+
+```bash
+SENTRY_ORG=your-org
+SENTRY_PROJECT=multica-mobile-staging
+SENTRY_AUTH_TOKEN=sntrys_...
+```
+
+`SENTRY_AUTH_TOKEN` must live in your shell or EAS secrets, never in git. For
+Expo export/EAS Update bundles, run the SDK upload helper after export:
+
+```bash
+npx sentry-expo-upload-sourcemaps dist
+```
+
 ## Voice backend behavior
 
 The iOS client records short audio locally and sends it only to the Multica backend speech proxy. It does not receive ASR/TTS provider keys. If the backend has speech disabled or the provider is unavailable, speech calls return typed recoverable errors such as `provider_missing`, `rate_limited`, `quota_exceeded`, or `provider_timeout`; the app should let the user continue by typing the message.

@@ -179,16 +179,6 @@ export default function ChatTab() {
     presenceDetail === "loading" ? undefined : presenceDetail.availability;
   const isArchived = activeSession?.status === "archived";
   const sending = !!pendingTask?.task_id;
-  const latestAssistantMessage = useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i -= 1) {
-      const message = messages[i];
-      if (message?.role === "assistant" && message.content.trim()) {
-        return message;
-      }
-    }
-    return null;
-  }, [messages]);
-
   // ── Drafts ─────────────────────────────────────────────────────────────
   const draftKey = activeSessionId ?? DRAFT_NEW_SESSION;
   const draft = useChatDraftsStore((s) => s.drafts[draftKey] ?? "");

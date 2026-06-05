@@ -60,7 +60,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
         "expo-audio",
         {
           microphonePermission:
-            "Allow Multica to record short voice messages for Agent chat transcription.",
+            "Allow Multica to use the microphone for voice calls with agents.",
         },
       ],
       "expo-secure-store",

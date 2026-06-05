@@ -9,6 +9,9 @@
  *     session, `sending` flips true and we replace the Send button slot
  *     with a Stop affordance (filled foreground bg + stop glyph). Tap →
  *     `onStop()` cancels the in-flight task.
+ *   - **Voice call entry**: when `onVoiceCall` is provided a round phone
+ *     button renders as a leading action. Tap → chat.tsx opens the
+ *     `<VoiceCallPanel>`.
  *   - **Mention picker mode=chat**: chat is user ↔ single agent so
  *     @member / @agent / @squad / @all are noise + would notify the
  *     wrong people. Picker route honors `?mode=chat` and surfaces only
@@ -26,28 +29,15 @@
  * Previously a hand-written 400-LOC twin of inline-comment-composer.tsx;
  * now ~50 LOC plus the StopButton subcomponent.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, AppState, Pressable, View } from "react-native";
+import { useCallback } from "react";
+import { Pressable, View } from "react-native";
 import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
-import {
-  RecordingPresets,
-  requestRecordingPermissionsAsync,
-  setAudioModeAsync,
-  useAudioPlayer,
-  useAudioPlayerStatus,
-  useAudioRecorder,
-  useAudioRecorderState,
-} from "expo-audio";
-import type { ChatMessage } from "@multica/core/types";
 import { MessageComposer } from "@/components/composer/message-composer";
-import { api } from "@/data/api";
 import { useWorkspaceStore } from "@/data/workspace-store";
 import { useColorScheme } from "@/lib/use-color-scheme";
 import { THEME } from "@/lib/theme";
-import { Text } from "@/components/ui/text";
-import { IconButton } from "@/components/ui/icon-button";
 
 interface Props {
   /** Current draft text (controlled). Empty string = no draft. */
@@ -60,7 +50,8 @@ interface Props {
   onSend: (content: string, attachmentIds: string[]) => Promise<void> | void;
   /** Cancel the in-flight agent task. Only callable while `sending===true`. */
   onStop: () => void;
-  latestAssistantMessage?: ChatMessage | null;
+  /** Open the call-like voice session UI. */
+  onVoiceCall?: () => void;
   /** True while an agent task is running for the active session. The
    *  composer swaps Send for Stop. */
   sending: boolean;
@@ -78,42 +69,14 @@ export function ChatComposer({
   onChangeText,
   onSend,
   onStop,
-  latestAssistantMessage,
+  onVoiceCall,
   sending,
   disabled = false,
   disabledReason,
 }: Props) {
   const wsSlug = useWorkspaceStore((s) => s.currentWorkspaceSlug);
-  const [voiceState, setVoiceState] = useState<
-    "idle" | "recording" | "transcribing" | "sending" | "synthesizing" | "playing" | "failed"
-  >("idle");
-  const [voiceError, setVoiceError] = useState<string | null>(null);
-  const [lastPlayedAssistantId, setLastPlayedAssistantId] = useState<string | null>(null);
-  const autoPlayPendingRef = useRef(false);
-  const autoPlayAfterMessageIdRef = useRef<string | null>(null);
-  const recorder = useAudioRecorder(RecordingPresets.LOW_QUALITY);
-  const recorderState = useAudioRecorderState(recorder, 250);
-  const player = useAudioPlayer(null, { updateInterval: 250 });
-  const playerStatus = useAudioPlayerStatus(player);
-
-  const statusLabel = useMemo(() => {
-    switch (voiceState) {
-      case "recording":
-        return `Recording ${Math.round(recorderState.durationMillis / 1000)}s`;
-      case "transcribing":
-        return "Transcribing…";
-      case "sending":
-        return "Sending transcript…";
-      case "synthesizing":
-        return "Preparing audio…";
-      case "playing":
-        return "Playing reply…";
-      case "failed":
-        return voiceError ?? "Voice action failed";
-      default:
-        return null;
-    }
-  }, [recorderState.durationMillis, voiceError, voiceState]);
+  const { colorScheme } = useColorScheme();
+  const theme = THEME[colorScheme];
 
   const onSubmit = useCallback(
     async ({
@@ -137,153 +100,8 @@ export function ChatComposer({
     onStop();
   }, [onStop]);
 
-  const startRecording = useCallback(async () => {
-    if (disabled || sending || voiceState !== "idle") return;
-    setVoiceError(null);
-    const permission = await requestRecordingPermissionsAsync();
-    if (!permission.granted) {
-      setVoiceState("failed");
-      setVoiceError("Microphone permission is required.");
-      Alert.alert(
-        "Microphone access needed",
-        "Enable microphone access in Settings to send voice messages.",
-      );
-      return;
-    }
-    await setAudioModeAsync({
-      allowsRecording: true,
-      playsInSilentMode: true,
-    });
-    await recorder.prepareToRecordAsync();
-    recorder.record({ forDuration: 60 });
-    setVoiceState("recording");
-  }, [disabled, recorder, sending, voiceState]);
-
-  const stopRecordingAndSend = useCallback(async () => {
-    if (voiceState !== "recording") return;
-    try {
-      await recorder.stop();
-      await setAudioModeAsync({
-        allowsRecording: false,
-        playsInSilentMode: true,
-      });
-      const uri = recorder.uri;
-      if (!uri) {
-        throw new Error("Recording did not produce an audio file.");
-      }
-      setVoiceState("transcribing");
-      const { transcript } = await api.transcribeSpeech({
-        uri,
-        name: "voice-message.m4a",
-        type: "audio/m4a",
-      });
-      const trimmed = transcript.trim();
-      if (!trimmed) {
-        throw new Error("No speech was detected.");
-      }
-      setVoiceState("sending");
-      autoPlayPendingRef.current = true;
-      autoPlayAfterMessageIdRef.current = latestAssistantMessage?.id ?? null;
-      await onSend(trimmed, []);
-      setVoiceState("idle");
-    } catch (err) {
-      autoPlayPendingRef.current = false;
-      autoPlayAfterMessageIdRef.current = null;
-      setVoiceState("failed");
-      setVoiceError(err instanceof Error ? err.message : "Voice message failed.");
-    }
-  }, [latestAssistantMessage?.id, onSend, recorder, voiceState]);
-
-  const toggleRecording = useCallback(() => {
-    if (voiceState === "recording") {
-      void stopRecordingAndSend();
-      return;
-    }
-    void startRecording();
-  }, [startRecording, stopRecordingAndSend, voiceState]);
-
-  const playAssistant = useCallback(
-    async (message?: ChatMessage | null) => {
-      const target = message ?? latestAssistantMessage;
-      if (!target?.content.trim()) return;
-      try {
-        setVoiceError(null);
-        setVoiceState("synthesizing");
-        const audio = await api.synthesizeSpeech(target.content);
-        player.replace({
-          uri: `data:${audio.content_type};base64,${audio.audio_base64}`,
-        });
-        await player.seekTo(0);
-        player.play();
-        setLastPlayedAssistantId(target.id);
-      } catch (err) {
-        setVoiceState("failed");
-        setVoiceError(err instanceof Error ? err.message : "Playback failed.");
-      }
-    },
-    [latestAssistantMessage, player],
-  );
-
-  const retryVoice = useCallback(() => {
-    setVoiceError(null);
-    setVoiceState("idle");
-  }, []);
-
-  useEffect(() => {
-    if (playerStatus.playing) {
-      setVoiceState((current) =>
-        current === "synthesizing" || current === "idle" ? "playing" : current,
-      );
-      return;
-    }
-    if (playerStatus.didJustFinish) {
-      setVoiceState("idle");
-    }
-  }, [playerStatus.didJustFinish, playerStatus.playing]);
-
-  useEffect(() => {
-    if (!autoPlayPendingRef.current) return;
-    if (!latestAssistantMessage) return;
-    if (latestAssistantMessage.id === autoPlayAfterMessageIdRef.current) return;
-    if (latestAssistantMessage.id === lastPlayedAssistantId) return;
-    autoPlayPendingRef.current = false;
-    autoPlayAfterMessageIdRef.current = null;
-    void playAssistant(latestAssistantMessage);
-  }, [latestAssistantMessage, lastPlayedAssistantId, playAssistant]);
-
-  useEffect(() => {
-    if (voiceState !== "recording") return;
-    const subscription = AppState.addEventListener("change", (nextState) => {
-      if (nextState === "active") return;
-      void recorder.stop().catch(() => {});
-      void setAudioModeAsync({
-        allowsRecording: false,
-        playsInSilentMode: true,
-      }).catch(() => {});
-      setVoiceState("failed");
-      setVoiceError("Recording stopped because Multica moved to the background.");
-    });
-    return () => subscription.remove();
-  }, [recorder, voiceState]);
-
   return (
     <View>
-      <VoiceControls
-        statusLabel={statusLabel}
-        failed={voiceState === "failed"}
-        recording={voiceState === "recording"}
-        busy={
-          voiceState === "transcribing" ||
-          voiceState === "sending" ||
-          voiceState === "synthesizing"
-        }
-        playing={voiceState === "playing"}
-        disabled={disabled || sending}
-        canPlay={!!latestAssistantMessage?.content.trim()}
-        onRecordPress={toggleRecording}
-        onPlayPress={() => void playAssistant()}
-        onRetryPress={retryVoice}
-      />
       <MessageComposer
         value={value}
         onChangeText={onChangeText}
@@ -304,6 +122,17 @@ export function ChatComposer({
         disabled={disabled}
         disabledReason={disabledReason}
         isSending={sending}
+        renderLeadingAction={
+          onVoiceCall
+            ? () => (
+                <VoiceCallButton
+                  onPress={onVoiceCall}
+                  disabled={disabled}
+                  color={theme.mutedForeground}
+                />
+              )
+            : undefined
+        }
         renderStop={() => <StopButton onPress={handleStop} />}
         manageKeyboard={false}
       />
@@ -311,70 +140,27 @@ export function ChatComposer({
   );
 }
 
-function VoiceControls({
-  statusLabel,
-  failed,
-  recording,
-  busy,
-  playing,
+function VoiceCallButton({
+  onPress,
   disabled,
-  canPlay,
-  onRecordPress,
-  onPlayPress,
-  onRetryPress,
+  color,
 }: {
-  statusLabel: string | null;
-  failed: boolean;
-  recording: boolean;
-  busy: boolean;
-  playing: boolean;
+  onPress: () => void;
   disabled: boolean;
-  canPlay: boolean;
-  onRecordPress: () => void;
-  onPlayPress: () => void;
-  onRetryPress: () => void;
+  color: string;
 }) {
-  const { colorScheme } = useColorScheme();
-  const theme = THEME[colorScheme];
   return (
-    <View className="border-t border-border bg-background px-3 pt-2">
-      <View className="flex-row items-center gap-2 rounded-2xl bg-secondary px-2 py-1.5">
-        <IconButton
-          name={recording ? "stop" : "mic-outline"}
-          iconSize={20}
-          color={recording ? theme.destructive : undefined}
-          onPress={onRecordPress}
-          disabled={disabled || busy || playing}
-          className="h-9 w-9"
-          accessibilityLabel={recording ? "Stop recording" : "Record voice message"}
-          accessibilityState={{ disabled: disabled || busy || playing }}
-        />
-        <Text
-          className={`flex-1 text-sm ${failed ? "text-destructive" : "text-muted-foreground"}`}
-          numberOfLines={1}
-        >
-          {statusLabel ?? "Voice mode"}
-        </Text>
-        {failed ? (
-          <IconButton
-            name="refresh"
-            iconSize={18}
-            onPress={onRetryPress}
-            className="h-9 w-9"
-            accessibilityLabel="Retry voice action"
-          />
-        ) : null}
-        <IconButton
-          name={playing ? "volume-high" : "play-circle-outline"}
-          iconSize={20}
-          onPress={onPlayPress}
-          disabled={!canPlay || busy || recording}
-          className="h-9 w-9"
-          accessibilityLabel="Play latest assistant reply"
-          accessibilityState={{ disabled: !canPlay || busy || recording }}
-        />
-      </View>
-    </View>
+    <Pressable
+      onPress={onPress}
+      disabled={disabled}
+      className="h-11 w-11 items-center justify-center rounded-full bg-primary active:opacity-80 disabled:opacity-50"
+      hitSlop={10}
+      accessibilityRole="button"
+      accessibilityLabel="Start voice call"
+      accessibilityState={{ disabled }}
+    >
+      <Ionicons name="call" size={18} color={disabled ? color : "white"} />
+    </Pressable>
   );
 }
 

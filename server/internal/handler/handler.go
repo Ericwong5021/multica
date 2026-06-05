@@ -84,6 +84,20 @@ type Config struct {
 	CloudRuntimeFleetTimeout time.Duration
 	AttachmentDownloadMode   string
 	AttachmentDownloadURLTTL time.Duration
+	Speech                   SpeechConfig
+}
+
+type SpeechConfig struct {
+	Mode          string
+	TranscribeURL string
+	SynthesizeURL string
+	APIKey        string
+	Mock          bool
+	HTTPClient    *http.Client
+	Timeout       time.Duration
+	MaxAudioBytes int64
+	MaxTextRunes  int
+	RateLimit     WebhookRateLimit
 }
 
 type cloudRuntimeProxy interface {
@@ -122,6 +136,8 @@ type Handler struct {
 	WebhookRateLimiter   WebhookRateLimiter
 	WebhookIPRateLimiter WebhookRateLimiter
 	CloudRuntime         cloudRuntimeProxy
+	Speech               SpeechProxy
+	SpeechRateLimiter    WebhookRateLimiter
 	// Lark integration. All three are nil when the Lark master key
 	// (MULTICA_LARK_SECRET_KEY) is unset; the corresponding HTTP
 	// handlers return 503 in that case so a misconfigured self-host
@@ -151,7 +167,7 @@ type Handler struct {
 	// process owner (main.go) starts it under a long-running context
 	// and joins via WaitWithTimeout (bounded wait, fenced by
 	// ShutdownTimeout) during graceful shutdown so the lease renewer
-	// can yield cleanly when the DB is healthy without blocking
+	// can yield cleanly when the DB is healthy without binding
 	// process exit indefinitely if the pool is frozen — at worst the
 	// next replica waits the full TTL.
 	LarkHub *lark.Hub
@@ -206,10 +222,12 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		Analytics:             analyticsClient,
 		WebhookRateLimiter:    NewMemoryWebhookRateLimiter(DefaultWebhookRateLimit()),
 		WebhookIPRateLimiter:  NewMemoryWebhookIPRateLimiter(DefaultWebhookIPRateLimit()),
+		SpeechRateLimiter:     NewMemoryWebhookRateLimiter(defaultSpeechRateLimit(cfg.Speech)),
 		CloudRuntime: cloudruntime.NewClient(cloudruntime.Config{
 			BaseURL: cfg.CloudRuntimeFleetURL,
 			Timeout: cfg.CloudRuntimeFleetTimeout,
 		}),
+		Speech: NewHTTPSpeechProxy(cfg.Speech),
 		cfg: cfg,
 	}
 }

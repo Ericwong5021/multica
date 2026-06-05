@@ -96,9 +96,61 @@ A free Apple ID signs builds for **7 days only**, Debug and Release both. After 
 
 ## Pointing at a different backend
 
-Edit `EXPO_PUBLIC_API_URL` in `.env.staging`, `.env.production`, or `.env.development.local` (whichever variant you're running). Then:
+`EXPO_PUBLIC_API_URL` is now only the default backend bundled into the app. On the login screen, open **Server → Change server**, enter a Multica backend origin, and save it. The app probes `/api/config`, persists the URL in SecureStore, clears the local session, and uses that server for HTTP, file upload, WebSocket, login, workspace, chat, and issue requests after app restart.
 
-- For an installed **Debug build**: restart Metro (`pnpm dev:mobile:staging`) so the next JS bundle picks up the new value.
-- For an installed **Release build**: re-run the `ios:mobile:device:staging:release` command — the value is baked into the embedded bundle at build time.
+Accepted examples:
 
-For local backend testing, use your Mac's LAN IP (`ipconfig getifaddr en0`), not `localhost`.
+- `https://api.example.com`
+- `http://192.168.1.42:8080`
+
+Use a backend origin only: no `/api`, workspace path, query string, or trailing route. For local backend testing from a phone or simulator on another device, use your Mac's LAN IP (`ipconfig getifaddr en0`), not `localhost`. The phone and server must be on the same network unless the backend is reachable through a public hostname or VPN.
+
+Tap **Use default** on the login screen to clear the custom backend and return to the build's bundled `EXPO_PUBLIC_API_URL`. This avoids getting stuck if a self-host URL is mistyped or no longer reachable.
+
+For self-hosted Multica, start the backend first, confirm `http://<host>:8080/health` returns JSON, then configure the mobile app with `http://<host>:8080`. If the backend exposes `daemon_app_url` from `/api/config`, mobile web links use that runtime app URL; otherwise they fall back to the build-time `EXPO_PUBLIC_WEB_URL`.
+
+Changing `.env.*` still changes the default URL for a newly built bundle, but it is no longer required just to connect an installed app to a self-hosted backend.
+
+## Crash reporting
+
+Crash reporting uses `@sentry/react-native` and is opt-in per environment.
+Local development stays quiet unless you explicitly enable it:
+
+```bash
+EXPO_PUBLIC_SENTRY_ENABLED=true
+EXPO_PUBLIC_SENTRY_DSN=https://public-key@o000000.ingest.sentry.io/0000000
+```
+
+Use a staging DSN for TestFlight/device validation and a production DSN only
+for production builds. `APP_ENV` is sent as the Sentry environment, and the
+app records release/version, platform, redacted route, and a hashed workspace
+slug. Do not include issue/comment text, attachment contents, audio, or
+transcripts in manual crash contexts.
+
+Source maps and native debug symbols are uploaded during EAS/native builds
+when these build-time variables are present:
+
+```bash
+SENTRY_ORG=your-org
+SENTRY_PROJECT=multica-mobile-staging
+SENTRY_AUTH_TOKEN=sntrys_...
+```
+
+`SENTRY_AUTH_TOKEN` must live in your shell or EAS secrets, never in git. For
+Expo export/EAS Update bundles, run the SDK upload helper after export:
+
+```bash
+npx sentry-expo-upload-sourcemaps dist
+```
+
+## Voice backend behavior
+
+The iOS client records short audio locally and sends it only to the Multica backend speech proxy. It does not receive ASR/TTS provider keys. If the backend has speech disabled or the provider is unavailable, speech calls return typed recoverable errors such as `provider_missing`, `rate_limited`, `quota_exceeded`, or `provider_timeout`; the app should let the user continue by typing the message.
+
+## Push notifications
+
+The iOS app uses `expo-notifications` to request APNs-backed Expo push permission after a signed-in user has an active workspace. Device tokens are registered against the current user + workspace through `/api/mobile/push-tokens`; sign-out unregisters the current token before clearing auth.
+
+Server delivery is driven by existing inbox events and notification preferences. `system_notifications=muted` disables lock-screen delivery while keeping in-app inbox/realtime behavior intact. Without `EXPO_ACCESS_TOKEN`, the backend records deliveries as dry-run `skipped` rows and does not call Expo. Set `EXPO_ACCESS_TOKEN` for real delivery; `MULTICA_EXPO_PUSH_URL` can override the Expo endpoint for tests, and `MULTICA_PUSH_DRY_RUN=true` forces dry-run.
+
+Manual iOS validation still requires a signed device build: allow/deny permission, receive a background notification for assignment/mention/comment/agent completion/failure/block, tap it, and confirm the app routes to the target workspace issue. If a workspace is unavailable, the app falls back to workspace selection.

@@ -142,6 +142,21 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 
 	cfSigner := auth.NewCloudFrontSignerFromEnv()
 
+	speechConfig := handler.SpeechConfig{
+		Mode:          strings.TrimSpace(os.Getenv("MULTICA_SPEECH_MODE")),
+		TranscribeURL: strings.TrimSpace(os.Getenv("MULTICA_SPEECH_TRANSCRIBE_URL")),
+		SynthesizeURL: strings.TrimSpace(os.Getenv("MULTICA_SPEECH_SYNTHESIZE_URL")),
+		APIKey:        strings.TrimSpace(os.Getenv("MULTICA_SPEECH_API_KEY")),
+		Mock:          os.Getenv("MULTICA_SPEECH_MOCK") == "true",
+		Timeout:       envDuration("MULTICA_SPEECH_TIMEOUT", 45*time.Second),
+		MaxAudioBytes: int64(envPositiveInt("MULTICA_SPEECH_MAX_AUDIO_BYTES", 10*1024*1024)),
+		MaxTextRunes:  envPositiveInt("MULTICA_SPEECH_MAX_TEXT_RUNES", 4000),
+		RateLimit: handler.WebhookRateLimit{
+			Limit:  envPositiveInt("MULTICA_SPEECH_RATE_LIMIT", 20),
+			Window: envDuration("MULTICA_SPEECH_RATE_WINDOW", time.Minute),
+		},
+	}
+
 	signupConfig := handler.Config{
 		AllowSignup:              os.Getenv("ALLOW_SIGNUP") != "false",
 		AllowedEmails:            splitAndTrim(os.Getenv("ALLOWED_EMAILS")),
@@ -153,6 +168,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		CloudRuntimeFleetTimeout: envDuration("MULTICA_CLOUD_FLEET_TIMEOUT", 35*time.Second),
 		AttachmentDownloadMode:   os.Getenv("ATTACHMENT_DOWNLOAD_MODE"),
 		AttachmentDownloadURLTTL: envDuration("ATTACHMENT_DOWNLOAD_URL_TTL", 30*time.Minute),
+		Speech:                   speechConfig,
 	}
 	h := handler.New(queries, pool, hub, bus, emailSvc, store, cfSigner, analyticsClient, signupConfig, daemonHub)
 	h.Metrics = opts.BusinessMetrics
@@ -177,6 +193,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		h.LivenessStore = handler.NewRedisLivenessStore(rdb)
 		h.WebhookRateLimiter = handler.NewRedisWebhookRateLimiter(rdb, handler.DefaultWebhookRateLimit())
 		h.WebhookIPRateLimiter = handler.NewRedisWebhookIPRateLimiter(rdb, handler.DefaultWebhookIPRateLimit())
+		h.SpeechRateLimiter = handler.NewRedisSpeechRateLimiter(rdb, handler.DefaultSpeechRateLimitForConfig(speechConfig))
 	}
 
 	// Lark integration. Only wired when MULTICA_LARK_SECRET_KEY is set:
@@ -350,6 +367,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	if opts.HeartbeatScheduler != nil {
 		h.HeartbeatScheduler = opts.HeartbeatScheduler
 	}
+	service.NewMobilePushServiceFromEnv(queries).Register(bus)
 	// Auth caches: PAT cache is shared between the regular Auth middleware,
 	// the DaemonAuth fallback (mul_) path, and the revoke handler
 	// (invalidate). DaemonTokenCache backs the DaemonAuth mdt_ path. Both
@@ -754,6 +772,15 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// Squad leader evaluation (writes to activity_log)
 			r.Post("/api/issues/{id}/squad-evaluated", h.RecordSquadLeaderEvaluation)
 
+			// Governance policy, approvals, and audit trail for high-risk
+			// workspace/project automation actions.
+			r.Route("/api/governance", func(r chi.Router) {
+				r.Get("/policy", h.GetGovernancePolicy)
+				r.Get("/approvals", h.ListGovernanceApprovals)
+				r.Post("/approvals", h.CreateGovernanceApproval)
+				r.Get("/audits", h.ListGovernanceAudits)
+			})
+
 			// Autopilots
 			r.Route("/api/autopilots", func(r chi.Router) {
 				r.Get("/", h.ListAutopilots)
@@ -939,6 +966,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			})
 			r.Get("/api/chat/pending-tasks", h.ListPendingChatTasks)
 
+			r.Route("/api/speech", func(r chi.Router) {
+				r.Post("/transcribe", h.TranscribeSpeech)
+				r.Post("/synthesize", h.SynthesizeSpeech)
+			})
+
 			// Inbox
 			r.Route("/api/inbox", func(r chi.Router) {
 				r.Get("/", h.ListInbox)
@@ -955,6 +987,12 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Route("/api/notification-preferences", func(r chi.Router) {
 				r.Get("/", h.GetNotificationPreferences)
 				r.Put("/", h.UpdateNotificationPreferences)
+			})
+
+			// Mobile push tokens
+			r.Route("/api/mobile/push-tokens", func(r chi.Router) {
+				r.Post("/", h.RegisterMobilePushToken)
+				r.Delete("/", h.UnregisterMobilePushToken)
 			})
 		})
 	})

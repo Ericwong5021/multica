@@ -9,6 +9,9 @@
  *     session, `sending` flips true and we replace the Send button slot
  *     with a Stop affordance (filled foreground bg + stop glyph). Tap →
  *     `onStop()` cancels the in-flight task.
+ *   - **Voice call entry**: when `onVoiceCall` is provided a round phone
+ *     button renders as a leading action. Tap → chat.tsx opens the
+ *     `<VoiceCallPanel>`.
  *   - **Mention picker mode=chat**: chat is user ↔ single agent so
  *     @member / @agent / @squad / @all are noise + would notify the
  *     wrong people. Picker route honors `?mode=chat` and surfaces only
@@ -47,6 +50,8 @@ interface Props {
   onSend: (content: string, attachmentIds: string[]) => Promise<void> | void;
   /** Cancel the in-flight agent task. Only callable while `sending===true`. */
   onStop: () => void;
+  /** Open the call-like voice session UI. */
+  onVoiceCall?: () => void;
   /** True while an agent task is running for the active session. The
    *  composer swaps Send for Stop. */
   sending: boolean;
@@ -64,11 +69,14 @@ export function ChatComposer({
   onChangeText,
   onSend,
   onStop,
+  onVoiceCall,
   sending,
   disabled = false,
   disabledReason,
 }: Props) {
   const wsSlug = useWorkspaceStore((s) => s.currentWorkspaceSlug);
+  const { colorScheme } = useColorScheme();
+  const theme = THEME[colorScheme];
 
   const onSubmit = useCallback(
     async ({
@@ -93,29 +101,66 @@ export function ChatComposer({
   }, [onStop]);
 
   return (
-    <MessageComposer
-      value={value}
-      onChangeText={onChangeText}
-      onSubmit={onSubmit}
-      mentionPickerPath={{
-        pathname: "/[workspace]/mention-picker",
-        params: { workspace: wsSlug ?? "", mode: "chat" },
-      }}
-      placeholder={sending ? "Agent is working…" : "Message…"}
-      pillLabel={
-        sending
-          ? "Agent is working…"
-          : disabled
-            ? (disabledReason ?? "Chat unavailable")
-            : "Message…"
-      }
-      pillIcon="chatbubble-ellipses-outline"
+    <View>
+      <MessageComposer
+        value={value}
+        onChangeText={onChangeText}
+        onSubmit={onSubmit}
+        mentionPickerPath={{
+          pathname: "/[workspace]/mention-picker",
+          params: { workspace: wsSlug ?? "", mode: "chat" },
+        }}
+        placeholder={sending ? "Agent is working…" : "Message…"}
+        pillLabel={
+          sending
+            ? "Agent is working…"
+            : disabled
+              ? (disabledReason ?? "Chat unavailable")
+              : "Message…"
+        }
+        pillIcon="chatbubble-ellipses-outline"
+        disabled={disabled}
+        disabledReason={disabledReason}
+        isSending={sending}
+        renderLeadingAction={
+          onVoiceCall
+            ? () => (
+                <VoiceCallButton
+                  onPress={onVoiceCall}
+                  disabled={disabled}
+                  color={theme.mutedForeground}
+                />
+              )
+            : undefined
+        }
+        renderStop={() => <StopButton onPress={handleStop} />}
+        manageKeyboard={false}
+      />
+    </View>
+  );
+}
+
+function VoiceCallButton({
+  onPress,
+  disabled,
+  color,
+}: {
+  onPress: () => void;
+  disabled: boolean;
+  color: string;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
       disabled={disabled}
-      disabledReason={disabledReason}
-      isSending={sending}
-      renderStop={() => <StopButton onPress={handleStop} />}
-      manageKeyboard={false}
-    />
+      className="h-11 w-11 items-center justify-center rounded-full bg-primary active:opacity-80 disabled:opacity-50"
+      hitSlop={10}
+      accessibilityRole="button"
+      accessibilityLabel="Start voice call"
+      accessibilityState={{ disabled }}
+    >
+      <Ionicons name="call" size={18} color={disabled ? color : "white"} />
+    </Pressable>
   );
 }
 

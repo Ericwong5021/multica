@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -581,6 +582,197 @@ func (c *httpAPIClient) GetMessage(ctx context.Context, creds InstallationCreden
 	out := make([]LarkMessage, 0, len(resp.Data.Items))
 	for _, it := range resp.Data.Items {
 		out = append(out, it.normalize())
+	}
+	return out, nil
+}
+
+// larkListMessagesMaxPageSize is Lark's hard cap on a single
+// im/v1/messages page. We clamp to it so a caller asking for more
+// silently gets the max rather than a 400 from Lark.
+const larkListMessagesMaxPageSize = 50
+
+// ListChatMessages retrieves a bounded, recent window of messages in one
+// chat via GET /open-apis/im/v1/messages?container_id_type=chat. Where
+// GetMessage fetches a single message by id, this lists a conversation;
+// it backs the enricher's group-context prefetch. We pass
+// sort_type=ByCreateTimeDesc so the newest messages come first and a
+// small page_size captures "the last N" without paginating, keeping the
+// inbound ACK path's fan-out to a single round-trip. user_id_type=open_id
+// matches the identifiers the rest of the package keys on; body.content
+// is forwarded verbatim for the enricher's flattener to interpret.
+func (c *httpAPIClient) ListChatMessages(ctx context.Context, creds InstallationCredentials, p ListMessagesParams) ([]LarkMessage, error) {
+	if p.ChatID == "" {
+		return nil, errors.New("lark http client: missing chat_id")
+	}
+	size := p.PageSize
+	if size <= 0 {
+		size = 1
+	} else if size > larkListMessagesMaxPageSize {
+		size = larkListMessagesMaxPageSize
+	}
+	token, err := c.tenantAccessToken(ctx, creds)
+	if err != nil {
+		return nil, err
+	}
+	q := url.Values{}
+	q.Set("container_id_type", "chat")
+	q.Set("container_id", string(p.ChatID))
+	q.Set("sort_type", "ByCreateTimeDesc")
+	q.Set("page_size", strconv.Itoa(size))
+	q.Set("user_id_type", "open_id")
+	if p.EndTime > 0 {
+		q.Set("end_time", strconv.FormatInt(p.EndTime, 10))
+	}
+	path := "/open-apis/im/v1/messages?" + q.Encode()
+
+	var resp struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+		Data struct {
+			Items []larkRESTMessageItem `json:"items"`
+		} `json:"data"`
+	}
+	if err := c.doJSON(ctx, c.resolveBaseURL(creds), http.MethodGet, path, token, nil, &resp); err != nil {
+		return nil, fmt.Errorf("lark http client: list chat messages: %w", err)
+	}
+	if resp.Code != 0 {
+		if isTokenError(resp.Code) {
+			c.invalidateToken(creds.AppID)
+		}
+		return nil, fmt.Errorf("lark http client: list chat messages: code=%d msg=%q", resp.Code, resp.Msg)
+	}
+
+	out := make([]LarkMessage, 0, len(resp.Data.Items))
+	for _, it := range resp.Data.Items {
+		out = append(out, it.normalize())
+	}
+	return out, nil
+}
+
+// larkBatchGetUsersMaxIDs is Lark's hard cap on user_ids per
+// contact/v3/users/batch call. We drop the overflow rather than error so
+// a caller asking for more still gets the first 50 resolved.
+const larkBatchGetUsersMaxIDs = 50
+
+// AddMessageReaction adds an emoji reaction to a message via
+// POST /open-apis/im/v1/messages/{message_id}/reactions.
+// Returns the reaction_id so it can be deleted later.
+func (c *httpAPIClient) AddMessageReaction(ctx context.Context, p AddReactionParams) (string, error) {
+	if p.MessageID == "" {
+		return "", errors.New("lark http client: missing message_id")
+	}
+	if p.EmojiType == "" {
+		return "", errors.New("lark http client: missing emoji_type")
+	}
+	token, err := c.tenantAccessToken(ctx, p.InstallationID)
+	if err != nil {
+		return "", err
+	}
+	body := map[string]any{
+		"reaction_type": map[string]string{"emoji_type": p.EmojiType},
+	}
+	path := "/open-apis/im/v1/messages/" + url.PathEscape(p.MessageID) + "/reactions"
+	var resp struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+		Data struct {
+			ReactionID string `json:"reaction_id"`
+		} `json:"data"`
+	}
+	if err := c.doJSON(ctx, c.resolveBaseURL(p.InstallationID), http.MethodPost, path, token, body, &resp); err != nil {
+		return "", fmt.Errorf("lark http client: add message reaction: %w", err)
+	}
+	if resp.Code != 0 || resp.Data.ReactionID == "" {
+		if isTokenError(resp.Code) {
+			c.invalidateToken(p.InstallationID.AppID)
+		}
+		return "", fmt.Errorf("lark http client: add message reaction: code=%d msg=%q", resp.Code, resp.Msg)
+	}
+	return resp.Data.ReactionID, nil
+}
+
+// DeleteMessageReaction removes a reaction from a message via
+// DELETE /open-apis/im/v1/messages/{message_id}/reactions/{reaction_id}.
+func (c *httpAPIClient) DeleteMessageReaction(ctx context.Context, p DeleteReactionParams) error {
+	if p.MessageID == "" {
+		return errors.New("lark http client: missing message_id")
+	}
+	if p.ReactionID == "" {
+		return errors.New("lark http client: missing reaction_id")
+	}
+	token, err := c.tenantAccessToken(ctx, p.InstallationID)
+	if err != nil {
+		return err
+	}
+	path := "/open-apis/im/v1/messages/" + url.PathEscape(p.MessageID) + "/reactions/" + url.PathEscape(p.ReactionID)
+	var resp struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+	}
+	if err := c.doJSON(ctx, c.resolveBaseURL(p.InstallationID), http.MethodDelete, path, token, nil, &resp); err != nil {
+		return fmt.Errorf("lark http client: delete message reaction: %w", err)
+	}
+	if resp.Code != 0 {
+		if isTokenError(resp.Code) {
+			c.invalidateToken(p.InstallationID.AppID)
+		}
+		return fmt.Errorf("lark http client: delete message reaction: code=%d msg=%q", resp.Code, resp.Msg)
+	}
+	return nil
+}
+
+// BatchGetUsers resolves user open_ids to display names via
+// GET /open-apis/contact/v3/users/batch?user_ids=…&user_id_type=open_id.
+// It mirrors fetchBotUnionID's single-user contact lookup, batched. Only
+// id->name pairs the API actually returns are included; a restricted
+// contact scope or an unknown id simply yields a smaller map (code==0
+// with fewer items), never an error, so the enricher degrades to
+// positional speaker labels. Ids past Lark's 50-per-call cap are dropped.
+func (c *httpAPIClient) BatchGetUsers(ctx context.Context, creds InstallationCredentials, openIDs []string) (map[string]string, error) {
+	if len(openIDs) == 0 {
+		return map[string]string{}, nil
+	}
+	if len(openIDs) > larkBatchGetUsersMaxIDs {
+		openIDs = openIDs[:larkBatchGetUsersMaxIDs]
+	}
+	token, err := c.tenantAccessToken(ctx, creds)
+	if err != nil {
+		return nil, err
+	}
+	q := url.Values{}
+	q.Set("user_id_type", "open_id")
+	for _, id := range openIDs {
+		if id != "" {
+			q.Add("user_ids", id)
+		}
+	}
+	path := "/open-apis/contact/v3/users/batch?" + q.Encode()
+
+	var resp struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+		Data struct {
+			Items []struct {
+				OpenID string `json:"open_id"`
+				Name   string `json:"name"`
+			} `json:"items"`
+		} `json:"data"`
+	}
+	if err := c.doJSON(ctx, c.resolveBaseURL(creds), http.MethodGet, path, token, nil, &resp); err != nil {
+		return nil, fmt.Errorf("lark http client: batch get users: %w", err)
+	}
+	if resp.Code != 0 {
+		if isTokenError(resp.Code) {
+			c.invalidateToken(creds.AppID)
+		}
+		return nil, fmt.Errorf("lark http client: batch get users: code=%d msg=%q", resp.Code, resp.Msg)
+	}
+
+	out := make(map[string]string, len(resp.Data.Items))
+	for _, it := range resp.Data.Items {
+		if it.OpenID != "" && it.Name != "" {
+			out[it.OpenID] = it.Name
+		}
 	}
 	return out, nil
 }
